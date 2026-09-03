@@ -167,7 +167,7 @@
         </div>
         <div class="login-header">
             <h1>DHIS2 METADATA EXPORT</h1>
-            <p>Select Datasets · Data Elements · Indicators</p>
+            <p>Select Datasets · Data Elements · Indicators · Org Units</p>
         </div>
         <div class="form-group">
             <label class="form-label">DHIS2 Instance URL</label>
@@ -265,17 +265,23 @@
                 <div class="section-header">
                     <span class="section-icon">2</span>
                     <span class="section-title">FETCH DATA ELEMENTS</span>
-                    <span class="section-subtitle">Fetches only elements from your selected datasets</span>
+                    <span class="section-subtitle">Pick datasets first, or skip straight to "Load All Data Elements"</span>
                 </div>
 
                 <div class="info-box" id="deInfoBox">
-                    Select datasets in Step 1 first, then click the button below to fetch their data elements and category option combos.
+                    Select datasets in Step 1, then click "Fetch Data Elements" to load only their elements — or click "Load All Data Elements (Optional)" to fetch every data element in the instance directly, no dataset selection needed.
                 </div>
 
                 <div class="btn-inline-row">
-                    <button class="btn-gold" id="fetchDeBtn" onclick="fetchDataElements()" disabled>Fetch Data Elements</button>
+                    <button class="btn-gold" id="fetchDeBtn" onclick="fetchDataElements()" disabled>Fetch Data Elements (from Selected Datasets)</button>
+                    <button class="btn-secondary" id="fetchAllDeBtn" onclick="fetchAllDataElements()" style="border-color:#20c997;color:#20c997;" onmouseover="this.style.background='#20c997';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#20c997'">
+                        Load All Data Elements (Optional)
+                    </button>
                     <button class="btn-secondary" id="fetchIndBtn" onclick="fetchIndicators()" style="border-color:#6f42c1;color:#6f42c1;" onmouseover="this.style.background='#6f42c1';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#6f42c1'">
                         Load Indicators (Optional)
+                    </button>
+                    <button class="btn-secondary" id="fetchOuBtn" onclick="fetchOrgUnits()" style="border-color:#fd7e14;color:#fd7e14;" onmouseover="this.style.background='#fd7e14';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#fd7e14'">
+                        Load Org Units (Optional)
                     </button>
                     <span id="deLoadStatus" style="font-size:12px;color:#666;"></span>
                 </div>
@@ -300,6 +306,9 @@
                     </div>
                     <div class="type-tab" id="tabInd" onclick="switchType('ind')">
                         Indicators <span class="badge" id="badgeInd">0</span>
+                    </div>
+                    <div class="type-tab" id="tabOu" onclick="switchType('ou')">
+                        Org Units <span class="badge" id="badgeOu">0</span>
                     </div>
                 </div>
 
@@ -379,7 +388,43 @@
                     </div>
                 </div>
 
-                <!-- EXPORT BUTTONS -->
+                <!-- ORG UNITS panels -->
+                <div id="paneOu" style="display:none;">
+                    <div class="dual-panel">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <span class="panel-title">Available Org Units</span>
+                                <span class="panel-count" id="ouAvailCount">0</span>
+                            </div>
+                            <div class="panel-search-wrap">
+                                <input class="panel-search" id="ouAvailSearch" placeholder="Search org units..." oninput="renderOuAvail()">
+                                <button class="clear-search-btn" onclick="document.getElementById('ouAvailSearch').value='';renderOuAvail()">&#x2715; Clear</button>
+                            </div>
+                            <div class="panel-actions">
+                                <button class="panel-action-btn btn-add-all" onclick="addAllOu()">Add All Visible</button>
+                            </div>
+                            <div class="panel-body" id="ouAvailPanel">
+                                <p style="color:#999;text-align:center;padding:20px;font-size:13px;">Click "Load Org Units" in Step 2</p>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <span class="panel-title">Selected Org Units</span>
+                                <span class="panel-count" id="ouSelCount">0</span>
+                            </div>
+                            <div class="panel-search-wrap">
+                                <input class="panel-search" id="ouSelSearch" placeholder="Search selected..." oninput="renderOuSel()">
+                                <button class="clear-search-btn" onclick="document.getElementById('ouSelSearch').value='';renderOuSel()">&#x2715; Clear</button>
+                            </div>
+                            <div class="panel-actions">
+                                <button class="panel-action-btn btn-clear-all" onclick="selOu.clear();renderOuAvail();renderOuSel()">Remove All</button>
+                            </div>
+                            <div class="panel-body" id="ouSelPanel">
+                                <p style="color:#999;text-align:center;padding:20px;font-size:13px;">No org units selected</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="btn-row">
                     <button class="btn-gold" onclick="exportExcel()">⬇ Download Excel (.xlsx)</button>
                     <button class="btn-secondary" onclick="exportCSV()">⬇ Download CSV</button>
@@ -407,11 +452,13 @@ let cfg = null;
 let allDatasets   = [];  // [{uid, name, periodType}]
 let allDataElements = []; // [{key, uid, name, datasetUid, datasetName, periodType, categoryComboName, cocs:[{id,name}]}]
 let allIndicators = [];  // [{uid, name, type, annualized, numDesc, denDesc, numerator, denominator}]
+let allOrgUnits   = [];  // [{uid, name, level, parentName, path}]
 
 // Selections
 let selDs  = new Map(); // uid -> dataset object
 let selDE  = new Map(); // key (deUid|dsUid) -> de object
 let selInd = new Map(); // uid -> indicator object
+let selOu  = new Map(); // uid -> org unit object
 
 // Open group state for DE available panel
 const openGroups = new Set();
@@ -568,13 +615,29 @@ async function fetchDataElements() {
         logTo('deLog', 'Fetching data elements for ' + selectedDsUids.length + ' dataset(s)...', 'info');
         setProgress('deProgress', 5);
 
-        // Fetch full dataset detail (with dataSetElements) only for selected datasets
-        // Use filter=id:in:[...] to batch if needed, but datasets are few so one call is fine
+        // Fetch full dataset detail (with dataSetElements) only for selected datasets.
+        // Try the batched filter=id:in:[...] call first; some instances/proxies choke
+        // on that syntax (404), so fall back to one plain request per dataset if it fails.
         const dsFilter = 'filter=id:in:[' + selectedDsUids.join(',') + ']';
+        let datasets = [];
         const r = await proxyFetch(cfg.instanceUrl + '/api/dataSets.json?' + dsFilter + '&fields=id,displayName,periodType,dataSetElements[dataElement[id,displayName]]&paging=false');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const data = await r.json();
-        const datasets = data.dataSets || [];
+        if (r.ok) {
+            const data = await r.json();
+            datasets = data.dataSets || [];
+        } else {
+            logTo('deLog', 'Batched fetch failed (HTTP ' + r.status + '), retrying dataset-by-dataset...', 'warning');
+            for (const dsUid of selectedDsUids) {
+                const rr = await proxyFetch(cfg.instanceUrl + '/api/dataSets/' + dsUid + '.json?fields=id,displayName,periodType,dataSetElements[dataElement[id,displayName]]');
+                if (rr.ok) {
+                    const dd = await rr.json();
+                    if (dd && dd.id) datasets.push(dd);
+                } else {
+                    logTo('deLog', '  Dataset ' + dsUid + ' failed: HTTP ' + rr.status, 'warning');
+                }
+            }
+            if (datasets.length === 0) throw new Error('Could not fetch any of the selected datasets (HTTP ' + r.status + ' on batched call, and per-dataset retry also failed)');
+            logTo('deLog', 'Recovered ' + datasets.length + ' of ' + selectedDsUids.length + ' dataset(s) via per-dataset fallback.', 'success');
+        }
         setProgress('deProgress', 25);
         logTo('deLog', 'Dataset details loaded. Collecting data element UIDs...', 'info');
 
@@ -585,12 +648,12 @@ async function fetchDataElements() {
         logTo('deLog', deUidArr.length + ' unique data elements found. Fetching category combos...', 'info');
         setProgress('deProgress', 30);
 
-        // Fetch category combos in batches of 100
+        // Fetch category combos in batches of 100 (fall back to per-element fetch if the batch call fails)
         const cocMap = new Map(); // deUid -> {categoryComboName, cocs:[{id,name}]}
         const batchSize = 100;
         for (let i = 0; i < deUidArr.length; i += batchSize) {
-            const batch = deUidArr.slice(i, i + batchSize).join(',');
-            const cr = await proxyFetch(cfg.instanceUrl + '/api/dataElements.json?filter=id:in:[' + batch + ']&fields=id,categoryCombo[id,displayName,categoryOptionCombos[id,displayName]]&paging=false');
+            const batch = deUidArr.slice(i, i + batchSize);
+            const cr = await proxyFetch(cfg.instanceUrl + '/api/dataElements.json?filter=id:in:[' + batch.join(',') + ']&fields=id,categoryCombo[id,displayName,categoryOptionCombos[id,displayName]]&paging=false');
             if (cr.ok) {
                 const cd = await cr.json();
                 (cd.dataElements || []).forEach(de => {
@@ -600,6 +663,20 @@ async function fetchDataElements() {
                         .sort((a,b) => a.name.localeCompare(b.name));
                     cocMap.set(de.id, { categoryComboName: de.categoryCombo.displayName || '', cocs });
                 });
+            } else {
+                logTo('deLog', '  Batched combo fetch failed (HTTP ' + cr.status + '), retrying element-by-element for this batch...', 'warning');
+                for (const deUid of batch) {
+                    const crr = await proxyFetch(cfg.instanceUrl + '/api/dataElements/' + deUid + '.json?fields=id,categoryCombo[id,displayName,categoryOptionCombos[id,displayName]]');
+                    if (crr.ok) {
+                        const dd = await crr.json();
+                        if (dd && dd.categoryCombo) {
+                            const cocs = (dd.categoryCombo.categoryOptionCombos || [])
+                                .map(c => ({ id: c.id, name: c.displayName || c.id }))
+                                .sort((a,b) => a.name.localeCompare(b.name));
+                            cocMap.set(dd.id, { categoryComboName: dd.categoryCombo.displayName || '', cocs });
+                        }
+                    }
+                }
             }
             setProgress('deProgress', 30 + Math.round(((i + batchSize) / deUidArr.length) * 55));
         }
@@ -641,7 +718,76 @@ async function fetchDataElements() {
         logTo('deLog', 'ERROR: ' + e.message, 'error');
         notify('Failed: ' + e.message, 'error');
     } finally {
-        btn.disabled = false; btn.textContent = 'Re-fetch Data Elements';
+        btn.disabled = false; btn.textContent = 'Re-fetch Data Elements (from Selected Datasets)';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// STEP 2a-bis — FETCH ALL DATA ELEMENTS DIRECTLY (optional, no dataset pick needed)
+// ══════════════════════════════════════════════════════════════════════════
+async function fetchAllDataElements() {
+    if (!cfg) { notify('Not connected', 'error'); return; }
+    const btn = document.getElementById('fetchAllDeBtn');
+    btn.disabled = true; btn.textContent = 'Loading all data elements...';
+    document.getElementById('deProgressWrap').style.display = 'block';
+    document.getElementById('deLog').innerHTML = '';
+    setProgress('deProgress', 0);
+    allDataElements = [];
+    selDE.clear(); openGroups.clear();
+
+    try {
+        logTo('deLog', 'Fetching all data elements directly (no dataset selection needed)...', 'info');
+        setProgress('deProgress', 15);
+        const r = await proxyFetch(cfg.instanceUrl + '/api/dataElements.json?fields=id,displayName,categoryCombo[id,displayName,categoryOptionCombos[id,displayName]],dataSetElements[dataSet[id,displayName,periodType]]&paging=false');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        setProgress('deProgress', 60);
+        const data = await r.json();
+        const des = data.dataElements || [];
+        logTo('deLog', des.length + ' data elements returned. Building rows...', 'info');
+
+        des.forEach(de => {
+            const uid  = de.id;
+            const name = de.displayName || uid;
+            const cocs = (de.categoryCombo && de.categoryCombo.categoryOptionCombos || [])
+                .map(c => ({ id: c.id, name: c.displayName || c.id }))
+                .sort((a,b) => a.name.localeCompare(b.name));
+            const categoryComboName = (de.categoryCombo && de.categoryCombo.displayName) || '';
+            const dsLinks = de.dataSetElements || [];
+            if (dsLinks.length === 0) {
+                // Orphan data element — not attached to any dataset
+                allDataElements.push({
+                    key: uid + '|none', uid, name,
+                    datasetUid: '', datasetName: '(No Dataset)', periodType: '',
+                    categoryComboName, cocs
+                });
+            } else {
+                dsLinks.forEach(dse => {
+                    if (!dse.dataSet) return;
+                    allDataElements.push({
+                        key:               uid + '|' + dse.dataSet.id,
+                        uid, name,
+                        datasetUid:        dse.dataSet.id,
+                        datasetName:       dse.dataSet.displayName || dse.dataSet.id,
+                        periodType:        dse.dataSet.periodType || '',
+                        categoryComboName, cocs
+                    });
+                });
+            }
+        });
+        allDataElements.sort((a,b) => { const d = a.datasetName.localeCompare(b.datasetName); return d !== 0 ? d : a.name.localeCompare(b.name); });
+
+        const uniqueCount = new Set(allDataElements.map(e => e.uid)).size;
+        setProgress('deProgress', 100);
+        logTo('deLog', 'Ready: ' + uniqueCount + ' unique data elements (' + allDataElements.length + ' DE+dataset entries).', 'success');
+        document.getElementById('deLoadStatus').textContent = uniqueCount + ' data elements ready';
+        document.getElementById('badgeDE').textContent = uniqueCount;
+        renderDeAvail(); renderDeSel();
+        notify('Data elements loaded: ' + uniqueCount + ' unique elements', 'success');
+    } catch(e) {
+        logTo('deLog', 'ERROR: ' + e.message, 'error');
+        notify('Failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false; btn.textContent = 'Load All Data Elements (Optional)';
     }
 }
 
@@ -696,13 +842,55 @@ async function fetchIndicators() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// STEP 2c — FETCH ORG UNITS (optional)
+// ══════════════════════════════════════════════════════════════════════════
+async function fetchOrgUnits() {
+    if (!cfg) { notify('Not connected', 'error'); return; }
+    const btn = document.getElementById('fetchOuBtn');
+    btn.disabled = true; btn.textContent = 'Loading org units...';
+    document.getElementById('deProgressWrap').style.display = 'block';
+    document.getElementById('deLog').innerHTML = '';
+    setProgress('deProgress', 0);
+    allOrgUnits = []; selOu.clear();
+
+    try {
+        logTo('deLog', 'Fetching organisation units...', 'info');
+        setProgress('deProgress', 20);
+        const r = await proxyFetch(cfg.instanceUrl + '/api/organisationUnits.json?fields=id,displayName,level,parent[displayName],ancestors[displayName]&paging=false');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        setProgress('deProgress', 70);
+        const d = await r.json();
+        allOrgUnits = (d.organisationUnits || []).map(ou => ({
+            uid:        ou.id,
+            name:       ou.displayName || ou.id,
+            level:      ou.level || '',
+            parentName: (ou.parent && ou.parent.displayName) || '',
+            path:       (ou.ancestors || []).map(a => a.displayName).concat(ou.displayName || ou.id).join(' / ')
+        })).sort((a,b) => a.level - b.level || a.name.localeCompare(b.name));
+
+        setProgress('deProgress', 100);
+        document.getElementById('badgeOu').textContent = allOrgUnits.length;
+        logTo('deLog', 'Loaded ' + allOrgUnits.length + ' organisation units.', 'success');
+        renderOuAvail(); renderOuSel();
+        notify('Org units loaded: ' + allOrgUnits.length, 'success');
+    } catch(e) {
+        logTo('deLog', 'ERROR: ' + e.message, 'error');
+        notify('Failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false; btn.textContent = 'Load Org Units (Optional)';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // STEP 3 — SELECT VARIABLES
 // ══════════════════════════════════════════════════════════════════════════
 function switchType(type) {
     document.getElementById('paneDE').style.display  = type === 'de'  ? 'block' : 'none';
     document.getElementById('paneInd').style.display = type === 'ind' ? 'block' : 'none';
+    document.getElementById('paneOu').style.display  = type === 'ou'  ? 'block' : 'none';
     document.getElementById('tabDE').classList.toggle('active',  type === 'de');
     document.getElementById('tabInd').classList.toggle('active', type === 'ind');
+    document.getElementById('tabOu').classList.toggle('active',  type === 'ou');
 }
 
 // ── Data Elements ──────────────────────────────────────────────────────────
@@ -849,11 +1037,58 @@ function addAllInd() {
     renderIndAvail(); renderIndSel();
 }
 
+// ── Org Units ──────────────────────────────────────────────────────────────
+function renderOuAvail() {
+    const search  = document.getElementById('ouAvailSearch').value.toLowerCase();
+    const panel   = document.getElementById('ouAvailPanel');
+    const visible = allOrgUnits.filter(i => !selOu.has(i.uid) && (!search || i.name.toLowerCase().includes(search) || i.path.toLowerCase().includes(search)));
+    document.getElementById('ouAvailCount').textContent = visible.length;
+    if (!visible.length) { panel.innerHTML = '<p style="color:#999;text-align:center;padding:20px;font-size:13px;">' + (allOrgUnits.length ? 'All added or no match' : 'Click "Load Org Units" in Step 2') + '</p>'; return; }
+    const frag = document.createDocumentFragment();
+    visible.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'avail-item';
+        div.innerHTML = '<span class="avail-item-name">' + esc(item.name) +
+            ' <span style="font-size:10px;color:#fd7e14;font-style:italic;">[Level ' + esc(item.level) + ']</span>' +
+            '<br><span style="font-size:10px;color:#888;">' + esc(item.path) + '</span></span>' +
+            '<span class="avail-item-uid">' + item.uid + '</span>' +
+            '<button class="add-btn" onclick="addOu(\'' + item.uid + '\')" style="background:#fd7e14;">+ Add</button>';
+        div.ondblclick = () => addOu(item.uid);
+        frag.appendChild(div);
+    });
+    panel.innerHTML = ''; panel.appendChild(frag);
+}
+
+function renderOuSel() {
+    const search = document.getElementById('ouSelSearch').value.toLowerCase();
+    const panel  = document.getElementById('ouSelPanel');
+    document.getElementById('ouSelCount').textContent = selOu.size;
+    const items = Array.from(selOu.values()).filter(i => !search || i.name.toLowerCase().includes(search)).sort((a,b) => a.level - b.level || a.name.localeCompare(b.name));
+    if (!items.length) { panel.innerHTML = '<p style="color:#999;text-align:center;padding:20px;font-size:13px;">No org units selected</p>'; return; }
+    const frag = document.createDocumentFragment();
+    items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'sel-item';
+        div.innerHTML = '<span class="sel-item-info"><span class="sel-item-name">' + esc(item.name) + '</span><span class="sel-item-meta">' + esc('Level ' + item.level + ' · ' + item.uid) + '</span></span>' +
+            '<button class="remove-btn" onclick="removeOu(\'' + item.uid + '\')">×</button>';
+        frag.appendChild(div);
+    });
+    panel.innerHTML = ''; panel.appendChild(frag);
+}
+
+function addOu(uid) { const i = allOrgUnits.find(x => x.uid === uid); if (i && !selOu.has(uid)) { selOu.set(uid, i); renderOuAvail(); renderOuSel(); } }
+function removeOu(uid) { selOu.delete(uid); renderOuAvail(); renderOuSel(); }
+function addAllOu() {
+    const search = document.getElementById('ouAvailSearch').value.toLowerCase();
+    allOrgUnits.filter(i => !selOu.has(i.uid) && (!search || i.name.toLowerCase().includes(search) || i.path.toLowerCase().includes(search))).forEach(i => selOu.set(i.uid, i));
+    renderOuAvail(); renderOuSel();
+}
+
 // ── Reset ──────────────────────────────────────────────────────────────────
 function resetAll() {
-    selDE.clear(); selInd.clear(); openGroups.clear();
-    ['deAvailSearch','deSelSearch','indAvailSearch','indSelSearch'].forEach(id => document.getElementById(id).value = '');
-    renderDeAvail(); renderDeSel(); renderIndAvail(); renderIndSel();
+    selDE.clear(); selInd.clear(); selOu.clear(); openGroups.clear();
+    ['deAvailSearch','deSelSearch','indAvailSearch','indSelSearch','ouAvailSearch','ouSelSearch'].forEach(id => document.getElementById(id).value = '');
+    renderDeAvail(); renderDeSel(); renderIndAvail(); renderIndSel(); renderOuAvail(); renderOuSel();
     notify('Variable selections cleared', 'info');
 }
 
@@ -884,9 +1119,15 @@ function buildIndRows() {
         .map(i => [i.name, i.uid, i.type, i.annualized, i.numDesc, i.denDesc, i.numerator, i.denominator]);
 }
 
+function buildOuRows() {
+    return Array.from(selOu.values())
+        .sort((a,b) => a.level - b.level || a.name.localeCompare(b.name))
+        .map(i => [i.name, i.uid, i.level, i.parentName, i.path]);
+}
+
 function exportExcel() {
-    const deRows = buildDERows(), indRows = buildIndRows();
-    if (!deRows.length && !indRows.length) { notify('No items selected', 'error'); return; }
+    const deRows = buildDERows(), indRows = buildIndRows(), ouRows = buildOuRows();
+    if (!deRows.length && !indRows.length && !ouRows.length) { notify('No items selected', 'error'); return; }
     const wb = XLSX.utils.book_new();
     if (deRows.length) {
         const ws = XLSX.utils.aoa_to_sheet([['Row Type','Data Element Name','Data Element UID','Category Option Combo','COC UID','Dataset Name','Dataset UID','Period Type','Category Combo'], ...deRows]);
@@ -898,13 +1139,18 @@ function exportExcel() {
         ws['!cols'] = [{wch:55},{wch:14},{wch:25},{wch:12},{wch:35},{wch:35},{wch:50},{wch:50}];
         XLSX.utils.book_append_sheet(wb, ws, 'Indicators');
     }
+    if (ouRows.length) {
+        const ws = XLSX.utils.aoa_to_sheet([['Org Unit Name','Org Unit UID','Level','Parent Name','Full Hierarchy Path'], ...ouRows]);
+        ws['!cols'] = [{wch:35},{wch:14},{wch:8},{wch:30},{wch:60}];
+        XLSX.utils.book_append_sheet(wb, ws, 'Org Units');
+    }
     XLSX.writeFile(wb, 'dhis2-metadata-' + new Date().toISOString().split('T')[0] + '.xlsx');
     notify('Excel downloaded', 'success');
 }
 
 function exportCSV() {
-    const deRows = buildDERows(), indRows = buildIndRows();
-    if (!deRows.length && !indRows.length) { notify('No items selected', 'error'); return; }
+    const deRows = buildDERows(), indRows = buildIndRows(), ouRows = buildOuRows();
+    if (!deRows.length && !indRows.length && !ouRows.length) { notify('No items selected', 'error'); return; }
     let csv = '';
     const q = v => '"' + String(v||'').replace(/"/g,'""') + '"';
     if (deRows.length) {
@@ -915,6 +1161,11 @@ function exportCSV() {
         if (csv) csv += '\r\n';
         csv += 'Indicator Name,Indicator UID,Indicator Type,Annualized,Numerator Description,Denominator Description,Numerator Expression,Denominator Expression\r\n';
         indRows.forEach(r => { csv += r.map(q).join(',') + '\r\n'; });
+    }
+    if (ouRows.length) {
+        if (csv) csv += '\r\n';
+        csv += 'Org Unit Name,Org Unit UID,Level,Parent Name,Full Hierarchy Path\r\n';
+        ouRows.forEach(r => { csv += r.map(q).join(',') + '\r\n'; });
     }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
